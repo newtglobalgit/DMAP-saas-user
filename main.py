@@ -80,7 +80,7 @@ def send_approval_email(user_data):
         return False
 if 'form_submitted' not in st.session_state:
     st.session_state.form_submitted = False
-st.title("☁️ Cloud Resource Request Form")
+st.title("☁️ DMAP SaaS offer - Cloud Resource Request Form")
 st.markdown("Please fill out the form below to request Azure cloud resources.")
 with st.form("resource_request_form"):
     full_name = st.text_input(
