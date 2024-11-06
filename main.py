@@ -122,7 +122,7 @@ with st.form("resource_request_form"):
             if send_approval_email(user_data):
                 st.session_state.form_submitted = True
                 st.success("Your request has been submitted successfully! You will receive a confirmation email shortly.")
-                st.experimental_rerun()
+                #st.experimental_rerun()
             else:
                 st.error("There was an error submitting your request. Please try again later.")
 if st.session_state.form_submitted:
