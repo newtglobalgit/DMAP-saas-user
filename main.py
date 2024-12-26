@@ -4,6 +4,22 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import os
+from github import Github
+import base64
+import json
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
+# Validate environment variables
+def validate_env_vars():
+    required_vars = ['GITHUB_TOKEN', 'SENDER_EMAIL', 'SENDER_PASSWORD', 'ADMIN_EMAIL']
+    missing_vars = [var for var in required_vars if not os.getenv(var)]
+    if missing_vars:
+        st.error(f"Missing required environment variables: {', '.join(missing_vars)}")
+        return False
+    return True
 
 st.set_page_config(
     page_title="DMAP SaaS offering - Cloud Resource Request Form",
@@ -78,9 +94,101 @@ def send_approval_email(user_data):
     except Exception as e:
         st.error(f"Failed to send email: {str(e)}")
         return False
+
+def create_branch_name(full_name):
+    """
+    Create a GitHub-compliant branch name from user's full name
+    Example: 'John Peter' -> 'john-peter-saas-offer-terraform'
+    """
+    # Convert to lowercase and replace spaces with hyphens
+    branch_name = full_name.lower().strip()
+    # Replace multiple spaces with single hyphen
+    branch_name = '-'.join(word for word in branch_name.split() if word)
+    # Add suffix
+    branch_name = f"{branch_name}-saas-offer-terraform"
+    # Remove any special characters except hyphens
+    branch_name = ''.join(c if c.isalnum() or c == '-' else '' for c in branch_name)
+    # Remove multiple consecutive hyphens
+    while '--' in branch_name:
+        branch_name = branch_name.replace('--', '-')
+    # Remove leading/trailing hyphens
+    branch_name = branch_name.strip('-')
+    return branch_name
+
+def update_github_terraform_vars(user_data):
+    """Update terraform variables in GitHub repository"""
+    try:
+        # Initialize GitHub client
+        github_token = os.getenv("GITHUB_TOKEN")
+        if not github_token:
+            raise ValueError("GitHub token not found in environment variables")
+        
+        g = Github(github_token)
+        repo = g.get_repo("newtglobalgit/DMAP_SAAS_OFFER_TERRAFORM")
+        
+        # Get main branch
+        main_branch = repo.get_branch("main")
+        
+        # Create new branch name using the standardized function
+        branch_name = create_branch_name(user_data['full_name'])
+        
+        try:
+            repo.create_git_ref(f"refs/heads/{branch_name}", main_branch.commit.sha)
+        except:
+            st.warning(f"Branch {branch_name} already exists, will update existing branch")
+        
+        # Get terraform.auto.tfvars file
+        file_path = "terraform.auto.tfvars"
+        file = repo.get_contents(file_path, ref="main")
+        content = base64.b64decode(file.content).decode()
+        
+        # Parse and update tags
+        try:
+            # Find the tags section and update it
+            lines = content.split('\n')
+            new_lines = []
+            in_tags = False
+            for line in lines:
+                if 'tags = {' in line:
+                    in_tags = True
+                    new_lines.append('tags = {')
+                    new_lines.append(f'    "Owner"       = "{user_data["full_name"]}"')
+                    new_lines.append(f'    "Email"       = "{user_data["email"]}"')
+                    new_lines.append(f'    "Company"     = "{user_data["company"]}"')
+                    new_lines.append(f'    "Designation" = "{user_data["designation"]}"')
+                    if user_data["phone"]:
+                        new_lines.append(f'    "Phone"       = "{user_data["phone"]}"')
+                    new_lines.append('  }')
+                    while in_tags and '}' not in line:
+                        next
+                    in_tags = False
+                elif not in_tags:
+                    new_lines.append(line)
+            
+            new_content = '\n'.join(new_lines)
+            
+            # Commit changes
+            repo.update_file(
+                file_path,
+                f"Update tags with information for {user_data['full_name']}",
+                new_content,
+                file.sha,
+                branch=branch_name
+            )
+            return True, branch_name
+            
+        except Exception as e:
+            raise Exception(f"Error updating terraform vars: {str(e)}")
+            
+    except Exception as e:
+        st.error(f"GitHub operation failed: {str(e)}")
+        return False, None
+
 if 'form_submitted' not in st.session_state:
     st.session_state.form_submitted = False
-st.title("☁️ DMAP SaaS offer - Cloud Resource Request Form")
+if not validate_env_vars():
+    st.stop()
+st.title(" DMAP SaaS offer - Cloud Resource Request Form")
 st.markdown("Please fill out the form below to request Azure cloud resources.")
 with st.form("resource_request_form"):
     full_name = st.text_input(
@@ -119,10 +227,20 @@ with st.form("resource_request_form"):
                 "company": company,
                 "designation": designation
             }
+            success = False
             if send_approval_email(user_data):
-                st.session_state.form_submitted = True
-                #st.success("Your request has been submitted successfully! You will receive a confirmation email shortly.")
-                #st.experimental_rerun()
+                # Update GitHub repository
+                github_success, branch_name = update_github_terraform_vars(user_data)
+                if github_success:
+                    st.session_state.form_submitted = True
+                    st.markdown(f"""
+                    <div class="success-message">
+                        Thank you for your request! Our team will review it and get back to you soon.<br>
+                        A new branch '{branch_name}' has been created with your information.
+                    </div>
+                    """, unsafe_allow_html=True)
+                else:
+                    st.error("Failed to update GitHub repository. Please contact support.")
             else:
                 st.error("There was an error submitting your request. Please try again later.")
 if st.session_state.form_submitted:
